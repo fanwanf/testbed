@@ -156,7 +156,7 @@ class VectorizedReplayMemory:
             return list(range(batch_size)), empty_states, empty_actions, empty_returns, empty_states, empty_nonterminals, empty_weights
 
         # Compute sampling probabilities (GPU)
-        valid_priorities = self.priorities[:current_size]
+        valid_priorities = self.priorities[:current_size].clamp(min=1e-8)  # guard against zero/stale entries
         probs = valid_priorities ** self.priority_exponent
         probs = probs / probs.sum()
 
@@ -203,18 +203,17 @@ class VectorizedReplayMemory:
         return idxs, states, actions, returns, next_states, nonterminals, weights
 
     def update_priorities(self, idxs, priorities):
-        """Update priorities (GPU)"""
+        """Update priorities (GPU); stores raw |TD error| — exponent is applied in sample()."""
         if not isinstance(priorities, torch.Tensor):
             priorities = torch.tensor(priorities, dtype=torch.float32, device=self.device)
         else:
             priorities = priorities.to(self.device)
-        priorities = priorities ** self.priority_exponent
+        # Store raw positive priorities; clamp away zero/NaN so they stay samplable
+        priorities = priorities.abs().clamp(min=1e-8)
 
-        # Use GPU tensor indexing directly
         if not isinstance(idxs, torch.Tensor):
             idxs = torch.tensor(idxs, dtype=torch.long, device=self.device)
         self.priorities[idxs] = priorities
-        # Use torch.max to avoid CPU transfer via .item()
         self.max_priority = torch.max(self.max_priority * torch.ones(1, device=self.device), priorities.max()).item()
 
 

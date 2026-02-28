@@ -437,6 +437,7 @@ class DQNBPP(nn.Module):
       attn_scores = attn_scores / math.sqrt(self.embedding_dim)
       attn_scores = attn_scores.masked_fill(invalid_ones.unsqueeze(1).bool(), float('-inf'))
       attn_weights = F.softmax(attn_scores, dim=-1)                       # [B, 1, 500]
+      attn_weights = torch.nan_to_num(attn_weights, nan=0.0)             # all-invalid → zero weights → graph_embed=0
       graph_embed  = torch.bmm(attn_weights, transEmbedding).squeeze(1)  # [B, 128]
 
       return embeddings, graph_embed
