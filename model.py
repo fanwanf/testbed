@@ -238,14 +238,18 @@ class DQNBPP(nn.Module):
     assert shapeArray is not None
     self.orginArray = shapeArray
     self.arrayPointNum  = 10000
-    self.shapeArray = shapeArray
+    # Move shapeArray to GPU to avoid CPU-GPU synchronization on every forward pass
+    self.shapeArray = shapeArray.to(args.device) if isinstance(shapeArray, torch.Tensor) else torch.tensor(shapeArray, device=args.device)
     if self.args.level == 'order':
-        self.shapeArray = torch.zeros((shapeArray.shape[0], self.arrayPointNum, shapeArray.shape[2]))
+        self.shapeArray = torch.zeros((shapeArray.shape[0], self.arrayPointNum, shapeArray.shape[2]), device=args.device)
     self.updateShapeArray()
 
     self.heightMap = args.heightMap
     self.rotNum = args.ZRotNum
     self.MapLength = int(args.bin_dimension[0] / args.resolutionH)
+    self.stepSize  = int(args.resolutionA / args.resolutionH)          # action-grid → heightmap scale
+    self.rangeX_A  = math.ceil(args.bin_dimension[0] / args.resolutionA)
+    self.rangeY_A  = math.ceil(args.bin_dimension[1] / args.resolutionA)
 
     zDim = 256
     self.zDim = zDim
@@ -253,31 +257,77 @@ class DQNBPP(nn.Module):
     self.output_size = zDim * 2
 
     # Network components
-    # you need to customize your cnn kernel here.
-    assert args.resolutionH == 0.01, 'you need to customize your cnn kernel here'
+    # CNN requires a 32x32 heightmap (project_layer input is 512 = 128 + 256 + 128)
+    # 256 = 8x8x4 = CNN output, corresponding to 32x32 input
+    assert self.MapLength == 32, f'CNN requires 32x32 heightmap, got {self.MapLength}x{self.MapLength}. Use bin_dimension=0.32 with resolutionH=0.01'
+
+    # ── Heightmap encoders ──────────────────────────────────────────────────
+    # Deeper spatial CNN: 32×32 → 16×16 → 8×8 with 64 channels.
+    # Richer intermediate representation; preserves spatial layout for patch sampling.
+    self.heightSpatialEncoder = nn.Sequential(
+        init_(nn.Conv2d(1,  32, 4, stride=2, padding=1)),  # 32 → 16
+        nn.LeakyReLU(),
+        init_(nn.Conv2d(32, 64, 4, stride=2, padding=1)),  # 16 → 8
+        nn.LeakyReLU(),
+        init_(nn.Conv2d(64, 64, 3, stride=1, padding=1)),  # 8  → 8  (richer features, no spatial loss)
+        nn.LeakyReLU(),
+    )
+    # Global 256-d descriptor via spatial avg-pool + linear projection.
+    self.heightGlobalPool = nn.Sequential(
+        nn.AdaptiveAvgPool2d(1),
+        nn.Flatten(),
+        init_(nn.Linear(64, 256)),
+        nn.LeakyReLU(),
+    )
+    # Legacy shallow encoder kept unchanged for the bufferSize>1 code path.
     self.heightEncoder = nn.Sequential()
-    self.heightEncoder.add_module('conv1', init_(nn.Conv2d(1, 16, 4, stride=2, padding=1)))  # 32 -> 16
+    self.heightEncoder.add_module('conv1', init_(nn.Conv2d(1, 16, 4, stride=2, padding=1)))
     self.heightEncoder.add_module('relu1', nn.LeakyReLU())
-    self.heightEncoder.add_module('conv2', init_(nn.Conv2d(16, 32, 4, stride=2, padding=1)))  # 16 -> 8
+    self.heightEncoder.add_module('conv2', init_(nn.Conv2d(16, 32, 4, stride=2, padding=1)))
     self.heightEncoder.add_module('relu2', nn.LeakyReLU())
-    self.heightEncoder.add_module('conv3', init_(nn.Conv2d(32, 4, 3, stride=1, padding=1)))  # 16 -> 8
+    self.heightEncoder.add_module('conv3', init_(nn.Conv2d(32,  4, 3, stride=1, padding=1)))
     self.heightEncoder.add_module('relu3', nn.LeakyReLU())
 
-    self.shapeEncoder = nn.Sequential()
-    self.shapeEncoder.add_module('linear1', init_(nn.Linear(3, 128)))
-    self.shapeEncoder.add_module('relu1', nn.LeakyReLU())
-    self.shapeEncoder.add_module('linear2', init_(nn.Linear(128, 128)))
-    self.shapeEncoder.add_module('relu2', nn.LeakyReLU())
+    # ── Shape encoder ───────────────────────────────────────────────────────
+    # Deeper PointNet: 4-layer MLP (3→64→128→256→128).
+    # After global max-pool the output is still 128-d (same as before),
+    # so the bufferSize>1 path is unaffected.
+    self.shapeEncoder = nn.Sequential(
+        init_(nn.Linear(3,   64)),  nn.LeakyReLU(),
+        init_(nn.Linear(64,  128)), nn.LeakyReLU(),
+        init_(nn.Linear(128, 256)), nn.LeakyReLU(),
+        init_(nn.Linear(256, 128)), nn.LeakyReLU(),
+    )
 
+    # ── Candidate embedding ─────────────────────────────────────────────────
+    # Deeper 3-layer MLP (4→64→128→128); same 128-d output.
     self.init_candidate_embed = nn.Sequential(
-        init_(nn.Linear(4, 32)),
+        init_(nn.Linear(4,   64)),  nn.LeakyReLU(),
+        init_(nn.Linear(64,  128)), nn.LeakyReLU(),
+        init_(nn.Linear(128, 128)),
+    )
+
+    # ── Local spatial patch encoder ─────────────────────────────────────────
+    # Each candidate gets a 64-d feature bilinearly sampled from heightSpatialEncoder
+    # at its (lx, ly) location; encoded to 64-d.
+    self.patchEncoder = nn.Sequential(
+        init_(nn.Linear(64, 64)),
         nn.LeakyReLU(),
-        init_(nn.Linear(32, 128)))
+    )
+
     self.embedding_dim = 128
+    # ── Fusion layer ────────────────────────────────────────────────────────
+    # shape(128) + global_map(256) + candidate(128) + local_patch(64) = 576
     self.project_layer = nn.Sequential(
-        init_(nn.Linear(512, 256)),
+        init_(nn.Linear(576, 256)),
         nn.LeakyReLU(),
-        init_(nn.Linear(256, self.embedding_dim)))
+        init_(nn.Linear(256, self.embedding_dim)),
+    )
+
+    # ── Attention pooling query ─────────────────────────────────────────────
+    # Replaces the naive mean-over-candidates for the global state value V(s).
+    # A learnable 128-d query attends selectively over valid candidate embeddings.
+    self.pool_query = nn.Parameter(torch.randn(1, 1, self.embedding_dim) * 0.1)
 
 
 
@@ -316,38 +366,76 @@ class DQNBPP(nn.Module):
   def embed_heightmap_and_sampled_point_cloud(self, x):
       batchSize = x.shape[0]
       next_item, actionMask, heightMap, candidates = observation_decode_irregular(x, self.args)
-      graph_size = candidates.size(1)
-
-      valid_mask = actionMask
-      invalid_ones = 1 - valid_mask
-
+      graph_size    = candidates.size(1)
       candidates_size = candidates.size(1)
+
+      valid_mask  = actionMask          # [B, 500]  1=valid
+      invalid_ones = 1 - valid_mask     # [B, 500]  1=invalid
+
+      # ── Heightmap encoding ────────────────────────────────────────────────
       heightMap = heightMap.reshape((batchSize, 1, self.MapLength, self.MapLength))
-      map_feature = self.heightEncoder(heightMap).reshape((batchSize, -1))
+      # Richer spatial feature map [B, 64, 8, 8] used for both global and local features.
+      spatial_feat = self.heightSpatialEncoder(heightMap)
+      map_feature  = self.heightGlobalPool(spatial_feat)         # [B, 256]
 
+      # ── Shape encoding ────────────────────────────────────────────────────
       next_item_ID = next_item[:, 0].long()
-
-      nextShape = self.shapeArray[next_item_ID.cpu()]
-      indices = np.random.randint(self.shapeArray.shape[1], size=self.args.samplePointsNum)
-      nextShape = nextShape[:, indices].to(self.args.device)
+      nextShape = self.shapeArray[next_item_ID]
+      indices   = torch.randint(0, self.shapeArray.shape[1],
+                                (self.args.samplePointsNum,), device=self.args.device)
+      nextShape = nextShape[:, indices]
 
       shape_feature = self.shapeEncoder(nextShape)
-      shape_feature = torch.max(shape_feature, dim=1)[0]
+      shape_feature = torch.max(shape_feature, dim=1)[0]         # [B, 128]
 
-      candidate_inputs = candidates.contiguous().view(batchSize, candidates_size, -1)
-      candidate_embedded_inputs = self.init_candidate_embed(candidate_inputs)
-      init_embedding = torch.cat((shape_feature.repeat(1, candidates_size).reshape(batchSize, candidates_size, -1),
-                                  map_feature.repeat((1, candidates_size)).reshape(batchSize, candidates_size, -1),
-                                  candidate_embedded_inputs), dim=2).view(batchSize * candidates_size, -1)
+      # ── Candidate embedding ───────────────────────────────────────────────
+      candidate_inputs         = candidates.contiguous().view(batchSize, candidates_size, -1)
+      candidate_embedded_inputs = self.init_candidate_embed(candidate_inputs)  # [B, 500, 128]
+
+      # ── Local spatial context per candidate ──────────────────────────────
+      # Bilinearly sample spatial CNN features at each candidate's (lx, ly) location.
+      # lx/ly are action-grid indices; we normalise to [-1, 1] for F.grid_sample.
+      lx = candidates[:, :, 1]  # [B, 500]
+      ly = candidates[:, :, 2]  # [B, 500]
+      x_norm = lx / max(self.rangeX_A - 1, 1) * 2.0 - 1.0
+      y_norm = ly / max(self.rangeY_A - 1, 1) * 2.0 - 1.0
+      # grid_sample: grid[...,0] indexes W (Y-direction), grid[...,1] indexes H (X-direction)
+      sample_grid = torch.stack([y_norm, x_norm], dim=-1).unsqueeze(2)  # [B, 500, 1, 2]
+      local_feat  = F.grid_sample(spatial_feat, sample_grid,
+                                  mode='bilinear', align_corners=True,
+                                  padding_mode='border')          # [B, 64, 500, 1]
+      local_feat  = local_feat.squeeze(-1).permute(0, 2, 1)       # [B, 500, 64]
+      local_feat  = self.patchEncoder(local_feat)                  # [B, 500, 64]
+
+      # ── Per-candidate fusion: shape + global_map + candidate + local_patch ─
+      # shape(128) + global_map(256) + candidate(128) + local_patch(64) = 576
+      init_embedding = torch.cat((
+          shape_feature.unsqueeze(1).expand(-1, candidates_size, -1),   # [B, 500, 128]
+          map_feature.unsqueeze(1).expand(-1, candidates_size, -1),     # [B, 500, 256]
+          candidate_embedded_inputs,                                      # [B, 500, 128]
+          local_feat,                                                     # [B, 500,  64]
+      ), dim=2).view(batchSize * candidates_size, -1)                    # [B*500, 576]
       init_embedding = self.project_layer(init_embedding).view(batchSize, candidates_size, self.embedding_dim)
 
-      embeddings = init_embedding
+      embeddings      = init_embedding
       embedding_shape = embeddings.shape
 
-      transEmbedding = embeddings.view((batchSize, graph_size, -1))
-      invalid_ones = invalid_ones.view(embedding_shape[0], embedding_shape[1], 1).expand(embedding_shape).bool()
-      transEmbedding[invalid_ones] = 0
-      graph_embed = transEmbedding.view(embedding_shape).mean(1)
+      # Zero out invalid candidates before pooling
+      transEmbedding   = embeddings.view((batchSize, graph_size, -1))
+      invalid_mask_exp = invalid_ones.view(embedding_shape[0], embedding_shape[1], 1) \
+                                     .expand(embedding_shape).bool()
+      transEmbedding[invalid_mask_exp] = 0
+
+      # ── Attention pooling (replaces naive mean) ───────────────────────────
+      # A learnable query selectively weights valid candidates to produce V(s).
+      # When all candidates are invalid the softmax safely returns near-uniform
+      # weights, and graph_embed is all-zeros (same as mean of zeros before).
+      q           = self.pool_query.expand(batchSize, -1, -1)            # [B, 1, 128]
+      attn_scores = torch.bmm(q, transEmbedding.transpose(1, 2))         # [B, 1, 500]
+      attn_scores = attn_scores / math.sqrt(self.embedding_dim)
+      attn_scores = attn_scores.masked_fill(invalid_ones.unsqueeze(1).bool(), -1e4)
+      attn_weights = F.softmax(attn_scores, dim=-1)                       # [B, 1, 500]
+      graph_embed  = torch.bmm(attn_weights, transEmbedding).squeeze(1)  # [B, 128]
 
       return embeddings, graph_embed
 
@@ -362,10 +450,11 @@ class DQNBPP(nn.Module):
       heightMap = heightMap.reshape((batchSize, 1, self.MapLength, self.MapLength))
       map_feature = self.heightEncoder(heightMap).reshape((batchSize, -1))
 
-      shapeIdx = next_k_shapes_ID.detach().cpu().long().reshape(-1)
+      # Index directly on GPU to avoid CPU-GPU synchronization
+      shapeIdx = next_k_shapes_ID.detach().long().reshape(-1)
       next_k_shapes = self.shapeArray[shapeIdx]
-      indices = np.random.randint(self.shapeArray.shape[1], size=self.args.samplePointsNum)
-      next_k_shapes = next_k_shapes[:, indices].to(self.args.device)
+      indices = torch.randint(0, self.shapeArray.shape[1], (self.args.samplePointsNum,), device=self.args.device)
+      next_k_shapes = next_k_shapes[:, indices]  # Already on GPU
 
       shape_feature = self.shapeEncoder(next_k_shapes)
 
