@@ -9,6 +9,9 @@ def extendMat(mat3, translation = None):
         mat4[0:3,3] = translation
     return mat4
 
+
+
+# Class for interacting with PyBullet
 class Interface:
     
     def __init__(self, bin = [10, 10, 5],
@@ -38,9 +41,10 @@ class Interface:
             self.simulationScale = simulationScale
         self.bin = np.array(bin)
         self.bin = np.round(self.bin * self.defaultScale, decimals=6)
-        self.shapeMap = {}
-        self.objs = []
-        self.objsDynamic = []
+
+        self.shapeMap = {} # Store loaded 3D shapes
+        self.objs = [] # Store all objects
+        self.objsDynamic = [] # Store dynamic (with mass, movable) objects
         self.g = [0.0, 0.0, -10.0]
         p.setGravity(self.g[0], self.g[1], self.g[2])
         p.setPhysicsEngineParameter(constraintSolverType=p.CONSTRAINT_SOLVER_LCP_PGS, globalCFM = 0.0001, numSolverIterations=10)
@@ -71,6 +75,7 @@ class Interface:
         if delId in self.objsDynamic:
             self.objsDynamic.remove(delId)
 
+    # Remove all objects outside the bin
     def reset(self):
         for id in set(self.objs + self.objsDynamic):
             p.removeBody(id)
@@ -86,6 +91,7 @@ class Interface:
         self.objsDynamic = []
         self.meshDict = {}
 
+    # Get all position and orientation information for objects
     def getAllPositionAndOrientation(self, inner = True):
         positions = []
         orientations = []
@@ -263,6 +269,7 @@ class Interface:
         self.objs.append(id)
         return id
 
+    # Not used
     def simulatePlain(self, batch = 1.0, dt = 0.01, maxBatch = 1):
         for _ in range(maxBatch):
             for i in range(int(batch/dt)):
@@ -297,6 +304,7 @@ class Interface:
                 if angular[0] * angular[0] + angular[1] * angular[1] + angular[2] * angular[2] > angularTolSqr:
                     end = False
 
+                # Get the bounding box of the object
                 minC, maxC = self.get_wraped_AABB(id)
 
                 midC = (maxC - minC) / 2 + minC
@@ -309,6 +317,7 @@ class Interface:
 
         return True, True
 
+    # Not used
     def simulateToQuasistaticRecord(self, givenId = None, linearTol = 0.001,
                               angularTol = 0.001, batch = 1.0, dt = 0.01, maxBatch = 5,
                                     id_List = [], returnRecord = True):
@@ -334,7 +343,7 @@ class Interface:
                 recordList.append(recordForThisTime)
         return recordList
 
-
+    # Not used
     def secondSimulation(self, linearTol = 0.001, angularTol = 0.001, batch = 1.0, dt = 0.01, maxBatch = 5):
         self.enableObjects()
 
@@ -402,9 +411,11 @@ class Interface:
                                      cameraTargetPosition = target)
         return dist, yaw, pitch, target
 
+    # Get the bounding box of the object
     def get_wraped_AABB(self, id, inner = True):
         return self.get_trimesh_AABB(id, inner)
 
+    # Get the coordinates and orientation of the front-left-bottom corner of the bounding box
     def get_Wraped_Position_And_Orientation(self, id, inner = True, getPosBase = False):
         return self.get_trimesh_Position_And_Orientation(id, inner, getPosBase)
 

@@ -74,7 +74,7 @@ def getConvexHullActions(posZValid, mask,  heightResolution):
     else:
         return None
 
-def convexHulls(posZMap, mask,   heightResolution = 0.01):
+def convexHulls(posZMap, mask, heightResolution = 0.01):
     mapInt = (posZMap // heightResolution).astype(np.int32)
     mapInt[mask==0] = -1
     uniqueHeight = np.unique(mapInt)

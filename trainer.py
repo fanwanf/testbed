@@ -142,17 +142,18 @@ class trainer(object):
                 os.makedirs(memory_save_path)
 
 
-        episode_rewards = deque(maxlen=10)
+        episode_rewards = deque(maxlen=10) # Queue of length 10 for storing the reward of each episode
         episode_ratio = deque(maxlen=10)
         episode_counter = deque(maxlen=10)
-        state = envs.reset()
+        state = envs.reset() # Reset the environment and obtain the initial state
         reward_clip = torch.ones((args.num_processes, 1)) * args.reward_clip
         R, loss = 0, 0
         if args.distributed:
-            counter= mp.Value('i', 0)
-            lock = mp.Value('b', False)
+            counter= mp.Value('i', 0) # Shared counter for distributed training
+            lock = mp.Value('b', False) # Shared lock for distributed training
+
         # Training loop
-        self.dqn.train()
+        self.dqn.train() # Set the model to training mode
         for T in trange(1, args.T_max + 1):
 
             if T % args.replay_frequency == 0 and not args.distributed:

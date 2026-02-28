@@ -1,5 +1,6 @@
 #--coding:utf-8--
 import copy
+# from socket import SO_J1939_ERRQUEUE
 
 import numpy as np
 import trimesh
@@ -231,6 +232,7 @@ def load_shape_dict(args, returnInfo = False, origin = False, scale = 1):
     objPath = args.objPath if not origin else args.objPath.replace('_vhacd', '')
     print('Load objects from:', objPath)
     shapeDict = torch.load(dicPath)
+
     for k in shapeDict.keys():
         if k >= args.categories: break
 

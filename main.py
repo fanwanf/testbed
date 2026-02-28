@@ -16,12 +16,12 @@ from envs import make_vec_envs
 
 def main(args):
 
-    # The name of this experiment, file backups and experiment tensorboard logs will be saved in related folder
+    # Experiment name
     if args.custom is None:
         args.custom = input('Please input the experiment name\n')
     timeStr = args.custom + '-' + time.strftime('%Y.%m.%d-%H-%M-%S', time.localtime(time.time()))
 
-    # Set the device
+    # Experiment device
     if torch.cuda.is_available() and not args.disable_cuda:
       args.device = torch.device('cuda:{}'.format(args.device))
       torch.cuda.manual_seed(args.seed)
@@ -42,28 +42,28 @@ def main(args):
         import torch.multiprocessing as mp
         mp.set_start_method("spawn", force=True)
 
-    # Backup all py files and create tensorboard logs
+    # Back up all Python files and create TensorBoard logs
     backup(timeStr, args)
     log_writer_path = './logs/runs/{}'.format('IR-' + timeStr)
     if not os.path.exists(log_writer_path):
       os.makedirs(log_writer_path)
     writer = SummaryWriter(log_writer_path)
 
+    # Create environment
     tempenv = gym.make(args.envName, args=args)
     args.action_space = tempenv.action_space.n
 
-
+    # Non-hierarchical policy: use only the location policy to solve the online packing problem
     if not args.hierachical:
-        # Not hierachical, only a location policy to solve the online packing problem
         args.level = 'location'
         args.model = args.locmodel
         dqn = Agent(args)
         memNum = args.num_processes
-        memory_capacity = int(args.memory_capacity / memNum)
-        mem = [ReplayMemory(args, memory_capacity, tempenv.obs_len) for _ in range(memNum)]
-        trainTool = trainer(writer, timeStr, dqn, mem)
+        memory_capacity = int(args.memory_capacity / memNum) # Experience replay capacity per environment
+        mem = [ReplayMemory(args, memory_capacity, tempenv.obs_len) for _ in range(memNum)] # Experience replay per environment
+        trainTool = trainer(writer, timeStr, dqn, mem) # Instance of trainer
     else:
-        # Besides the location policy, an order policy is also needed to solve the bufferd packing problem
+        # Hierarchical policy: use both location and order policies to solve the buffered packing problem
         orderArgs = copy.deepcopy(args)
         orderArgs.level = 'order'
         orderArgs.action_space = args.bufferSize
@@ -99,7 +99,7 @@ def main(args):
     else:
         # Perform all training.
         envs, spaces, obs_len = make_vec_envs(args, './logs/runinfo', True)
-        trainTool.train_q_value(envs, args)
+        trainTool.train_q_value(envs, args)  # Core training main function
 
 if __name__ == '__main__':
     registration_envs()

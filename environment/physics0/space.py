@@ -14,8 +14,8 @@ def draw_heatmap(heightMap, vmin = 0, vmax = 0.32):
 class Space(object):
     def __init__(self, bin_dimension, resolutionAct, resolutionH, boxPack = False,  ZRotNum = None, shotInfo = None, scale = None):
         self.bin_dimension = bin_dimension
-        self.resolutionH = resolutionH
-        self.resolutionAct = resolutionAct
+        self.resolutionH = resolutionH # Resolution of the height map (high precision)
+        self.resolutionAct = resolutionAct # Resolution of the action space (low precision)
         self.stepSize = int(self.resolutionAct / self.resolutionH)
         assert self.stepSize == self.resolutionAct / self.resolutionH
         self.rotNum = ZRotNum
@@ -94,39 +94,43 @@ class Space(object):
             np.maximum(self.heightmapC[coorX:coorX + rangeX_O, coorY:coorY + rangeY_O], heightMapH)
 
 
-    # 动作设计，还没想好怎么做(感觉这玩意还挺关键的，因为动作空间会很大)
+    # Action design (the action space can be large, so this is important)
     def get_possible_position(self, next_item_ID, next_item, selectedAction):
 
-        rotNum = len(next_item)
-        naiveMask = np.zeros((rotNum, self.rangeX_A, self.rangeY_A))
-        self.posZmap[:] = 1e3
+        rotNum = len(next_item) # Number of rotation angles: 8
+        naiveMask = np.zeros((rotNum, self.rangeX_A, self.rangeY_A)) # naiveMask for each rotation angle
+        self.posZmap[:] = 1e3 # Initialize Z coordinate map to a large value
         for rotIdx in range(rotNum):
-            boundingSize = np.round(next_item[rotIdx].extents, decimals=6)
-            rangeX_OH, rangeY_OH = np.ceil(boundingSize[0:2] / self.resolutionH).astype(np.int32)
-            rangeX_OA, rangeY_OA = np.ceil(boundingSize[0:2] / self.resolutionAct).astype(np.int32)
+            boundingSize = np.round(next_item[rotIdx].extents, decimals=6) # Bounding box size under the current rotation
+            rangeX_OH, rangeY_OH = np.ceil(boundingSize[0:2] / self.resolutionH).astype(np.int32) # X, Y grid cells occupied in the height map grid (high resolution)
+            rangeX_OA, rangeY_OA = np.ceil(boundingSize[0:2] / self.resolutionAct).astype(np.int32) # X, Y grid cells occupied in the action space grid (low resolution)
             if self.shotInfo is not None:
-                heightMapT, heightMapB, maskH, maskB = self.shotInfo[next_item_ID][rotIdx] # 这个操作很省运算量，之后也可以考虑用进来
+                heightMapT, heightMapB, maskH, maskB = self.shotInfo[next_item_ID][rotIdx] # This saves computation; can be reused later
             else:
                 heightMapT, heightMapB, maskH, maskB = shot_item(next_item[rotIdx],
                                                                  self.ray_origins,
                                                                  self.ray_directions,
                                                                  rangeX_OH, rangeY_OH)
 
-            for X in range(self.rangeX_A - rangeX_OA + 1):
-                for Y in range(self.rangeY_A - rangeY_OA + 1):
-                    coorX, coorY = X * self.stepSize, Y * self.stepSize
+            for X in range(self.rangeX_A - rangeX_OA + 1): # Number of valid starting positions in X direction
+                for Y in range(self.rangeY_A - rangeY_OA + 1): # Number of valid starting positions in Y direction
+                    coorX, coorY = X * self.stepSize, Y * self.stepSize # Convert action space coordinates to height map coordinates
+                    # self.heightmapC: current height map of the container (records max height at each grid position)
+                    # heightmapB: bottom height map of the object (heights of bottom points relative to object base, local frame)
+                    # maskB: bottom mask of the object (for irregular shapes)
+                    # posZ: the height at which the object base should be placed
                     posZ = np.max((self.heightmapC[coorX: coorX + rangeX_OH, coorY: coorY + rangeY_OH]
                                   - heightMapB) * maskB)
                     if np.round(posZ + boundingSize[2] - self.bin_dimension[2], decimals=6) <= 0:
-                        naiveMask[rotIdx, X, Y] = 1
-                    self.posZmap[rotIdx, X, Y] = posZ
+                        naiveMask[rotIdx, X, Y] = 1 # If position is valid, set mask to 1
+                    self.posZmap[rotIdx, X, Y] = posZ # Record placement height for this position
 
         self.naiveMask = naiveMask.copy()
         invalidIndex = np.where(naiveMask==0)
         self.posZValid[:] = self.posZmap[:]
-        self.posZValid[invalidIndex] = 1e3
+        self.posZValid[invalidIndex] = 1e3 # Map invalid position Z coordinates to a large value
 
-        return naiveMask
+        return naiveMask # Return mask of all possible positions
 
     def get_possible_position_custom(self, next_item, rotIdx = 0):
 

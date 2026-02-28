@@ -76,7 +76,7 @@ def make_vec_envs(args,
     envs = [
         make_env(env_name, seed, i, log_dir, allow_early_resets, args)
         for i in range(num_processes)
-    ]
+    ] # Create num_processes environments
 
     """
         If you don't specify observation_space, we'll have to create a dummy

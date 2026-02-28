@@ -1,0 +1,35 @@
+# IR-BPP IsaacGym version dependencies
+# Python 3.8 recommended
+# Note: PyTorch and IsaacGym need to be installed separately, see README_isaacgym.md
+
+# ============ Core Dependencies ============
+numpy>=1.21.0,<1.24.0
+gym==0.23.1
+
+# ============ Deep Learning ============
+# PyTorch needs to be installed separately based on CUDA version:
+# pip install torch==1.13.0+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+tensorboardX>=2.5
+
+# ============ 3D Geometry Processing ============
+trimesh>=3.12.0
+transforms3d>=0.3.1
+
+# ============ Visualization and Tools ============
+matplotlib>=3.3.0
+tqdm>=4.48.0
+opencv-contrib-python>=4.4.0
+
+# ============ Spatial Indexing ============
+rtree>=0.9.7
+
+# ============ Optimization Solver ============
+cvxpy>=1.2.0
+
+# ============ IsaacGym Related ============
+# IsaacGym needs to be downloaded from the NVIDIA website and installed manually
+# See README_isaacgym.md
+
+# ============ Optional Dependencies ============
+# pybullet>=3.2.1  # If you need to run the original PyBullet environment
+# scipy>=1.7.0     # May be needed by some optimization algorithms

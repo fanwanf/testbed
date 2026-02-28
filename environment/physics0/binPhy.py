@@ -29,14 +29,14 @@ class PackingGame(gym.Env):
         self.scale         = args['scale']
         self.objPath       = args['objPath']
         self.meshScale     = args['meshScale']
-        self.shapeDict     = args['shapeDict']
+        self.shapeDict     = args['shapeDict'] # shape_vhacd
         self.infoDict      = args['infoDict']
-        self.dicPath       = load(args['dicPath'])
+        self.dicPath       = load(args['dicPath']) # id2shape.pt path
         self.ZRotNum       = args['ZRotNum']
-        self.heightMapPre  = args['heightMap']
+        self.heightMapPre  = args['heightMap'] # True
         self.globalView    = not args['only_simulate_current']
-        self.selectedAction= args['selectedAction']
-        self.bufferSize    = args['bufferSize']
+        self.selectedAction= args['selectedAction'] # How many actions to select from the action space
+        self.bufferSize    = args['bufferSize'] # Object buffer size default 1
         self.chooseItem    = self.bufferSize > 1
         self.simulation    = args['simulation']
         self.evaluate      = args['evaluate']
@@ -50,11 +50,12 @@ class PackingGame(gym.Env):
 
 
         self.interface = None
-        self.item_vec = np.zeros((1000, 9))
+        self.item_vec = np.zeros((1000, 9)) # Item info including item ID, position, rotation
         self.rangeX_A, self.rangeY_A = np.ceil(self.bin_dimension[0:2] / self.resolutionAct).astype(np.int32)
         self.space = Space(self.bin_dimension, self.resolutionAct, self.resolutionH, False,   self.ZRotNum,
                            args['shotInfo'], self.scale)
 
+        # Used to load objects; can be random or fixed
         if self.evaluate and self.dataname is not None:
             self.item_creator = LoadItemCreator(data_name=self.dataname)
         else:
@@ -66,6 +67,7 @@ class PackingGame(gym.Env):
                 assert self.dataSample == 'pose'
                 self.item_creator = RandomItemCreator(np.arange(0, len(self.shapeDict.keys())))
 
+        
         self.next_item_vec = np.zeros((9))
 
         self.item_idx = 0
@@ -78,10 +80,10 @@ class PackingGame(gym.Env):
                 self.transformation.append([quat[1],quat[2],quat[3],quat[0]]) # Saved in xyzw
         self.transformation = np.array(self.transformation)
 
-        self.rotNum = self.ZRotNum
-        self.act_len = self.selectedAction
+        self.rotNum = self.ZRotNum 
+        self.act_len = self.selectedAction # Length of the action space, default 500
 
-        if self.chooseItem:
+        if self.chooseItem: # Not considered for now
             self.act_len = self.bufferSize
 
         if not self.chooseItem:
@@ -94,7 +96,7 @@ class PackingGame(gym.Env):
         else:
             self.obs_len = self.bufferSize
 
-        if self.heightMapPre:
+        if self.heightMapPre: # heightmap represents a 2D grid recording 3D space occupancy
             self.obs_len += self.space.heightmapC.size
 
         self.observation_space = gym.spaces.Box(low=0.0, high=self.bin_dimension[2],
@@ -185,7 +187,7 @@ class PackingGame(gym.Env):
             positions, orientations = self.interface.getAllPositionAndOrientation(inner=False)
             self.item_vec[0:self.item_idx, 1:4] = np.array([positions[0:self.item_idx]])
             self.item_vec[0:self.item_idx, 4:8] = np.array([orientations[0:self.item_idx]])
-        if not self.chooseItem:
+        if not self.chooseItem: # Only consider this case for now
             if genItem:
                 self.next_item_ID = self.gen_next_item_ID()
             self.next_item_vec[0] = self.next_item_ID
@@ -260,8 +262,10 @@ class PackingGame(gym.Env):
 
             sim_suc = False
             success = self.prejudge(rotIdx, targetFLB, self.space.naiveMask)
+
+            # Load the object and adjust its height
             self.id = self.interface.addObject(self.dicPath[self.next_item_ID][0:-4], targetFLB = targetFLB, rotation = rotation,
-                                          linearDamping = 0.5, angularDamping = 0.5)
+                                          linearDamping = 0.5, angularDamping = 0.5) # [0:-4] removes the .obj suffix, keeping only the object name
 
             height = self.space.posZmap[rotIdx, coordinate[0], coordinate[1]]
             self.interface.adjustHeight(self.id , height + self.tolerance)

@@ -2,11 +2,11 @@ import numpy as np
 import copy
 import torch
 
-# 如果想把dict改掉的话，主要是修改这里的逻辑
-class ItemCreator(object): # 存一个查shape的字典， 再存一个记录编号的list
+# To change the dict, mainly modify the logic here
+class ItemCreator(object): # Stores a dict for looking up shapes, and a list for recording indices
     def __init__(self):
-        self.item_dict = {} # 根据编号查shape的字典
-        self.item_list = [] # 已经存放的item的编号
+        self.item_dict = {} # Dict for looking up shapes by index
+        self.item_list = [] # List of indices of already stored items
 
     def reset(self, index = None):
         self.item_list.clear()
@@ -23,6 +23,7 @@ class ItemCreator(object): # 存一个查shape的字典， 再存一个记录编
         assert len(self.item_list) >= 0
         self.item_list.pop(index)
 
+# Fully random item generation
 class RandomItemCreator(ItemCreator):
     def __init__(self, item_set):
         super().__init__()
@@ -32,6 +33,7 @@ class RandomItemCreator(ItemCreator):
     def generate_item(self):
         self.item_list.append(np.random.choice(self.item_set))
 
+# Generate items by instance with two-level randomization
 class RandomInstanceCreator(ItemCreator):
     def __init__(self, item_set, dicPath):
         super().__init__()
@@ -50,6 +52,7 @@ class RandomInstanceCreator(ItemCreator):
         name = np.random.choice(list(self.inverseDict.keys()))
         self.item_list.append(np.random.choice(self.inverseDict[name]))
 
+# Generate items by category with two-level randomization
 class RandomCateCreator(ItemCreator):
     def __init__(self, item_set, dicPath):
         super().__init__()
@@ -71,6 +74,7 @@ class RandomCateCreator(ItemCreator):
         name = np.random.choice(list(self.categories.keys()))
         self.item_list.append(np.random.choice(self.objCates[name]))
 
+# Load predefined item trajectories
 class LoadItemCreator(ItemCreator):
     def __init__(self, data_name=None):
         super().__init__()

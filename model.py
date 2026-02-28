@@ -348,6 +348,10 @@ class DQNBPP(nn.Module):
     self.fc_z_v = NoisyLinear(args.hidden_size, self.atoms, std_init=args.noisy_std)
     self.fc_z_a = NoisyLinear(args.hidden_size, self.atoms, std_init=args.noisy_std)
 
+    # Fixed sample indices for point cloud sub-sampling — consistent across all forward passes
+    self.register_buffer('_shape_sample_idx',
+        torch.randint(0, self.shapeArray.shape[1], (args.samplePointsNum,)))
+
   def updateShapeArray(self):
       if self.args.level == 'order':
           indices = np.random.randint(self.shapeArray.shape[1], size=self.arrayPointNum)
@@ -381,9 +385,7 @@ class DQNBPP(nn.Module):
       # ── Shape encoding ────────────────────────────────────────────────────
       next_item_ID = next_item[:, 0].long()
       nextShape = self.shapeArray[next_item_ID]
-      indices   = torch.randint(0, self.shapeArray.shape[1],
-                                (self.args.samplePointsNum,), device=self.args.device)
-      nextShape = nextShape[:, indices]
+      nextShape = nextShape[:, self._shape_sample_idx]
 
       shape_feature = self.shapeEncoder(nextShape)
       shape_feature = torch.max(shape_feature, dim=1)[0]         # [B, 128]
@@ -433,7 +435,7 @@ class DQNBPP(nn.Module):
       q           = self.pool_query.expand(batchSize, -1, -1)            # [B, 1, 128]
       attn_scores = torch.bmm(q, transEmbedding.transpose(1, 2))         # [B, 1, 500]
       attn_scores = attn_scores / math.sqrt(self.embedding_dim)
-      attn_scores = attn_scores.masked_fill(invalid_ones.unsqueeze(1).bool(), -1e4)
+      attn_scores = attn_scores.masked_fill(invalid_ones.unsqueeze(1).bool(), float('-inf'))
       attn_weights = F.softmax(attn_scores, dim=-1)                       # [B, 1, 500]
       graph_embed  = torch.bmm(attn_weights, transEmbedding).squeeze(1)  # [B, 128]
 
@@ -453,8 +455,7 @@ class DQNBPP(nn.Module):
       # Index directly on GPU to avoid CPU-GPU synchronization
       shapeIdx = next_k_shapes_ID.detach().long().reshape(-1)
       next_k_shapes = self.shapeArray[shapeIdx]
-      indices = torch.randint(0, self.shapeArray.shape[1], (self.args.samplePointsNum,), device=self.args.device)
-      next_k_shapes = next_k_shapes[:, indices]  # Already on GPU
+      next_k_shapes = next_k_shapes[:, self._shape_sample_idx]
 
       shape_feature = self.shapeEncoder(next_k_shapes)
 
@@ -468,7 +469,7 @@ class DQNBPP(nn.Module):
       embedding_shape = embeddings.shape
 
       transEmbedding = embeddings.view((batchSize, graph_size, -1))
-      graph_embed = transEmbedding.view(embedding_shape).mean(1)
+      graph_embed = transEmbedding.mean(1)
       return embeddings, graph_embed
 
 

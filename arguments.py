@@ -1,4 +1,5 @@
 import argparse
+import os
 import torch
 import numpy as np
 from tools import load_shape_dict, shotInfoPre, shapeProcessing
@@ -20,7 +21,7 @@ def get_args():
     parser.add_argument('--discount', type=float, default=0.99, metavar='γ', help='Discount factor')
     parser.add_argument('--reward-clip', type=int, default=0, metavar='VALUE', help='Reward clipping (0 to disable)')
     parser.add_argument('--learning-rate', type=float, default=0.0000625, metavar='η', help='Learning rate')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='SIZE', help='Batch size')
+    parser.add_argument('--batch-size', type=int, default=256, metavar='SIZE', help='Batch size')
     parser.add_argument('--norm-clip', type=float, default=10, metavar='NORM', help='Max L2 norm for gradient clipping')
     parser.add_argument('--memory-capacity', type=int, default=int(1e5), metavar='CAPACITY',
                         help='Experience replay memory capacity')
@@ -28,7 +29,7 @@ def get_args():
                         help='Frequency of sampling from memory')
     parser.add_argument('--priority-exponent', type=float, default=0.5, metavar='ω',
                         help='Prioritised experience replay exponent (originally denoted α)')
-    parser.add_argument('--priority-weight', type=float, default=1.0, metavar='β',
+    parser.add_argument('--priority-weight', type=float, default=0.4, metavar='β',
                         help='Initial prioritised experience replay importance sampling weight')
     parser.add_argument('--id', type=str, default='default', help='Experiment ID')
     parser.add_argument('--seed', type=int, default=123, help='Random seed')
@@ -79,6 +80,7 @@ def get_args():
     parser.add_argument('--selectedAction', type=int, default=500, help='How many actions to select from the action space')
     parser.add_argument('--maxBatch', type=int, default=2, help='How many batches for simulation')
     parser.add_argument('--visual', action='store_true', help='Render the scene')
+    parser.add_argument('--fixed-sequence', action='store_true', help='Use fixed item sequence for debugging')
     parser.add_argument('--resolutionA', type=float, default = 0.02, help='The resolution for the action space')
     parser.add_argument('--resolutionH', type=float, default = 0.01, help='The resolution for the heightmap')
     parser.add_argument('--resolutionZ', type=float, default = 0.01, help='The resolution for the z axis')
@@ -102,9 +104,10 @@ def get_args():
       print(' ' * 26 + k + ': ' + str(v))
 
 
-    args.objPath = './dataset/{}/shape_vhacd'.format(args.dataset)
-    args.pointCloud = './dataset/{}/pointCloud'.format(args.dataset)
-    args.dicPath = './dataset/{}/id2shape.pt'.format(args.dataset)
+    _project_root = os.path.dirname(os.path.abspath(__file__))
+    args.objPath   = os.path.join(_project_root, 'dataset', args.dataset, 'shape_vhacd')
+    args.pointCloud = os.path.join(_project_root, 'dataset', args.dataset, 'pointCloud')
+    args.dicPath   = os.path.join(_project_root, 'dataset', args.dataset, 'id2shape.pt')
 
     if  args.dataset == 'kitchen':
         args.dataSample = 'category'
@@ -112,7 +115,7 @@ def get_args():
         args.dataSample = 'instance'
 
     args.categories = len(torch.load(args.dicPath))
-    args.bin_dimension = np.round([0.32, 0.32, 0.30], decimals=6)
+    args.bin_dimension = np.round([0.5, 0.5, 0.5], decimals=6)
 
     args.ZRotNum = args.resolutionRot  # Max: 4/8
 
@@ -120,7 +123,7 @@ def get_args():
     args.model = None
     args.load_memory_path = None
     args.save_memory_path = None
-    args.scale =  [100, 100, 100] # fix it! don't change it!
+    args.scale =  [10, 10, 10]  # Spatial scaling factor (larger value means relatively smaller objects)
     args.meshScale = 1
     args.heightResolution = args.resolutionZ
     args.shapeDict, args.infoDict = load_shape_dict(args, True, scale=args.meshScale)
