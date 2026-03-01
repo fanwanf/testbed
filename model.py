@@ -175,7 +175,7 @@ def observation_decode_irregular(observation, args):
     batchSize = observation.shape[0]
     observation = observation.reshape((batchSize, -1))
     actions = observation[:, 0 : args.selectedAction * 5].reshape(batchSize, -1, 5)
-    next_item = observation[:, args.selectedAction * 5 : args.selectedAction * 5 + 1].reshape((batchSize, -1))
+    next_item = observation[:, args.selectedAction * 5 : args.selectedAction * 5 + 9].reshape((batchSize, -1))
     actionMasks = actions[:,:, -1]
     actions = actions[:,:, 0:-1]
     heightMap = observation[:, args.selectedAction * 5 + 9:]
@@ -299,10 +299,33 @@ class DQNBPP(nn.Module):
         init_(nn.Linear(256, 128)), nn.LeakyReLU(),
     )
 
+    # ── PointNet mean+max projection ────────────────────────────────────────
+    # Concatenates max-pooled and mean-pooled PointNet features (256-d) → 128-d.
+    # Mean captures average shape distribution; max captures dominant structure.
+    self.shapeProjection = nn.Sequential(
+        init_(nn.Linear(256, 128)),
+        nn.LeakyReLU(),
+    )
+
+    # ── Geometry encoder ────────────────────────────────────────────────────
+    # Encodes next item's bounding box dims (both rotations, normalized) + volume
+    # (7 scalars → 128-d) added as a residual on shape_feature.
+    # Lets the model reason explicitly about item size without relying solely on PointNet.
+    self.geomEncoder = nn.Sequential(
+        init_(nn.Linear(7,  64)),
+        nn.LeakyReLU(),
+        init_(nn.Linear(64, 128)),
+    )
+
+    # ── Rotation embedding ──────────────────────────────────────────────────
+    # Learned 16-d embedding per rotation index instead of raw scalar.
+    # ZRotNum+1 entries for safety (index 0..ZRotNum).
+    self.rotEmbedding = nn.Embedding(args.ZRotNum + 1, 16)
+
     # ── Candidate embedding ─────────────────────────────────────────────────
-    # Deeper 3-layer MLP (4→64→128→128); same 128-d output.
+    # Input: 3 position dims (x, y, h) + 16-d rotation embedding = 19 dims.
     self.init_candidate_embed = nn.Sequential(
-        init_(nn.Linear(4,   64)),  nn.LeakyReLU(),
+        init_(nn.Linear(19,  64)),  nn.LeakyReLU(),
         init_(nn.Linear(64,  128)), nn.LeakyReLU(),
         init_(nn.Linear(128, 128)),
     )
@@ -383,16 +406,28 @@ class DQNBPP(nn.Module):
       map_feature  = self.heightGlobalPool(spatial_feat)         # [B, 256]
 
       # ── Shape encoding ────────────────────────────────────────────────────
-      next_item_ID = next_item[:, 0].long()
-      nextShape = self.shapeArray[next_item_ID]
-      nextShape = nextShape[:, self._shape_sample_idx]
+      next_item_ID   = next_item[:, 0].long()
+      next_item_geom = next_item[:, 1:8].float()                  # [B, 7] normalized bbox dims + volume
 
-      shape_feature = self.shapeEncoder(nextShape)
-      shape_feature = torch.max(shape_feature, dim=1)[0]         # [B, 128]
+      nextShape = self.shapeArray[next_item_ID]
+      nextShape = nextShape[:, self._shape_sample_idx]            # [B, 1024, 3]
+
+      shape_feat_all = self.shapeEncoder(nextShape)               # [B, 1024, 128]
+      shape_max  = torch.max(shape_feat_all, dim=1)[0]            # [B, 128]
+      shape_mean = shape_feat_all.mean(dim=1)                     # [B, 128]
+      shape_feature = self.shapeProjection(
+          torch.cat([shape_max, shape_mean], dim=1))              # [B, 128]
+
+      # Residual: explicit bounding-box geometry (size + volume) on top of PointNet
+      geom_feature  = self.geomEncoder(next_item_geom)            # [B, 128]
+      shape_feature = shape_feature + geom_feature                # [B, 128]
 
       # ── Candidate embedding ───────────────────────────────────────────────
-      candidate_inputs         = candidates.contiguous().view(batchSize, candidates_size, -1)
-      candidate_embedded_inputs = self.init_candidate_embed(candidate_inputs)  # [B, 500, 128]
+      rot_idx   = candidates[:, :, 0].long()                      # [B, 500]
+      pos_feat  = candidates[:, :, 1:].contiguous()               # [B, 500, 3] — x, y, h
+      rot_emb   = self.rotEmbedding(rot_idx)                      # [B, 500, 16]
+      cand_input = torch.cat([pos_feat, rot_emb], dim=-1)         # [B, 500, 19]
+      candidate_embedded_inputs = self.init_candidate_embed(cand_input)  # [B, 500, 128]
 
       # ── Local spatial context per candidate ──────────────────────────────
       # Bilinearly sample spatial CNN features at each candidate's (lx, ly) location.

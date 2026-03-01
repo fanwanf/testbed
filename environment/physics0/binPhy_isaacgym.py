@@ -218,6 +218,9 @@ class PackingGame:
         self.episodeCounter = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.updatePeriod = 500
 
+        # Total packed volume per environment (used for terminal packing efficiency reward)
+        self.total_packed_volume = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+
         # Hierarchical action related
         self.orderAction = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.hierachical = False
@@ -446,6 +449,9 @@ class PackingGame:
         # Hierarchical action
         self.orderAction[envs_index] = 0
 
+        # Packed volume accumulator (also reset in step() when done, but clear here for safety)
+        self.total_packed_volume[envs_index] = 0.0
+
         # ==================== 7. Generate Initial Observation ====================
         # Call cur_observation directly, passing environment indices
         observation = self.cur_observation(genItem=True, envs_index=envs_index)
@@ -527,12 +533,21 @@ class PackingGame:
 
             self.next_item_vec[envs_index, 0] = next_item_ids.float()
 
-            # Populate fields 1-7 with last placed item's position and quaternion
-            has_items = self.item_idx[envs_index] > 0
-            if has_items.any():
-                last_indices = (self.item_idx[envs_index] - 1).clamp(min=0).long()
-                last_item_data = self.item_vec[envs_index, last_indices, 1:8]  # [N, 7]
-                self.next_item_vec[envs_index[has_items], 1:8] = last_item_data[has_items]
+            # Populate fields 1-7 with next item's geometric properties (normalized by bin dims):
+            #   [1-3]: bounding box (w, d, h) for rotation 0  / bin_dimension
+            #   [4-6]: bounding box (w, d, h) for rotation 1  / bin_dimension  (zeros if rotNum < 2)
+            #   [7]:   volume ratio = item_volume / bin_volume
+            valid_geom = next_item_ids >= 0
+            if valid_geom.any():
+                valid_envs_g = envs_index[valid_geom]
+                valid_ids_g  = next_item_ids[valid_geom].long()
+                bin_dim = torch.tensor(self.bin_dimension, device=self.device, dtype=torch.float32)
+                self.next_item_vec[valid_envs_g, 1:4] = self.space.boundingSize[valid_ids_g, 0, :] / bin_dim
+                if self.rotNum >= 2:
+                    self.next_item_vec[valid_envs_g, 4:7] = self.space.boundingSize[valid_ids_g, 1, :] / bin_dim
+                self.next_item_vec[valid_envs_g, 7] = self.items_volume[valid_ids_g + 5] / self.bin_volume
+            if (~valid_geom).any():
+                self.next_item_vec[envs_index[~valid_geom], 1:] = 0.0
 
             # Compute possible placement positions (needs to be computed for all environments)
             next_item_ids_all = self.next_item_vec[:, 0].long()
@@ -990,13 +1005,21 @@ class PackingGame:
         # When simulation fails, the entire environment must be reset since other objects may be affected
         done = (~success) | failed_final
 
-        # Reward (volume reward only, consistent with original)
+        # Reward: per-step volume reward + terminal packing efficiency reward
         reward = torch.zeros(num_envs, device=self.device, dtype=torch.float32)
         if success_final.any():
-            # Volume reward: object volume / bin volume * 10
+            # Per-step reward: item_volume / bin_volume * 10
             item_ratio = self.get_item_ratio(next_item_ids[success_final])
-            volume_reward = item_ratio * 10  # approximately 0.5-2.0
+            volume_reward = item_ratio * 10
             reward[success_final] = volume_reward
+
+        # Terminal reward: total packed volume / bin volume * 10, given at episode end.
+        # Incentivises maximising overall packing density, not just placing individual items.
+        # Resets packed volume immediately so the next episode starts clean.
+        if done.any():
+            terminal_bonus = self.total_packed_volume[done] / self.bin_volume * 10.0
+            reward[done] = reward[done] + terminal_bonus
+            self.total_packed_volume[done] = 0.0
 
         # ==================== 8. Update State ====================
         if success_final.any():
@@ -1027,6 +1050,9 @@ class PackingGame:
                 actor_indices=actor_indices_local[success_local],
                 item_type_ids=safe_item_ids[success_local]  # Item type IDs
             )
+
+            # Accumulate packed volume for terminal packing efficiency reward
+            self.total_packed_volume[success_envs] += self.items_volume[next_item_ids[success_local] + 5]
 
         # ==================== 9. Handle Simulation Failures ====================
         # Environments with simulation failures are marked as done; the training loop will call reset.

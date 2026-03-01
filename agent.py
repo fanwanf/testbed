@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import optim
 from torch.nn.utils import clip_grad_norm_
-from model import DQNBPP
+from model import DQNBPP, observation_decode_irregular
 import math
 
 # Finished
@@ -89,7 +89,12 @@ class Agent():
       # Calculate nth next state probabilities
       pns = self.online_net(next_states)  # Probabilities p(s_t+n, ·; θonline)
       dns = self.support.expand_as(pns) * pns  # Distribution d_t+n = (z, p(s_t+n, ·; θonline))
-      argmax_indices_ns = dns.sum(2).argmax(1)  # Perform argmax action selection using online network: argmax_a[(z, p(s_t+n, a; θonline))]
+      # Mask invalid actions before Double-DQN argmax — prevents selecting infeasible placements as targets
+      _, next_action_masks, _, _ = observation_decode_irregular(next_states, self.args)
+      next_valid = next_action_masks.bool()                         # [B, 500] True=valid
+      dns_expected = dns.sum(2)                                     # [B, 500] expected Q
+      dns_expected = dns_expected.masked_fill(~next_valid, float('-inf'))
+      argmax_indices_ns = dns_expected.argmax(1)                    # [B]
 
       self.target_net.reset_noise()  # Sample new target net noise
 

@@ -13,8 +13,8 @@ def get_args():
     parser.add_argument('--noisy-std', type=float, default=0.5, metavar='σ',
                         help='Initial standard deviation of noisy linear layers')
     parser.add_argument('--atoms', type=int, default=31, metavar='C', help='Discretised size of value distribution')
-    parser.add_argument('--V-min', type=float, default=-1, metavar='V', help='Minimum of value distribution support')
-    parser.add_argument('--V-max', type=float, default=8, metavar='V', help='Maximum of value distribution support')
+    parser.add_argument('--V-min', type=float, default=0, metavar='V', help='Minimum of value distribution support')
+    parser.add_argument('--V-max', type=float, default=20, metavar='V', help='Maximum of value distribution support')
     parser.add_argument('--target-update', type=int, default=int(1e3), metavar='τ',
                         help='Number of steps after which to update target network')
     parser.add_argument('--multi-step', type=int, default=3, metavar='n', help='Number of steps for multi-step return')
