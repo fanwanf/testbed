@@ -188,11 +188,15 @@ class VectorizedReplayMemory:
         # Compute n-step discounted returns
         returns = (step_rewards * cumulative_nonterminal * discounts).sum(dim=1)  # [batch_size]
 
-        # Use stored next_states directly (solves multi-env interleaved storage issue)
+        # next_states: s_{t+1} stored directly at append time — correct for n=1.
+        # (For n>1, s_{t+n} would be needed, but consecutive buffer positions come from
+        # different envs in a vectorised setup, so n>1 is set to 1 in main_isaacgym.py.)
         next_states = self.next_states[idxs]
 
-        # Use stored nonterminal
-        nonterminals = self.nonterminals[idxs].float()  # [batch_size]
+        # Nonterminal for Bellman bootstrapping: bootstrap only if NO terminal occurred
+        # in ANY of the n steps in the window.  prod(nonterminals over window) = 1 iff all
+        # steps were non-terminal.  For n=1 this is identical to nonterminals[idxs].
+        nonterminals = step_nonterminals.float().prod(dim=1)  # [batch_size]
 
         # Compute importance sampling weights (GPU)
         sampled_probs = probs[idxs]
@@ -416,7 +420,7 @@ class TrainerIsaacGym:
 
                 # Number of learning iterations - fixed small value to maintain speed
                 # With many environments, each step collects a lot of data; few iterations suffice
-                num_learning_iters = 8  # increased from 4 to better utilise collected data
+                num_learning_iters = 4  # 4 matches data throughput: 4 steps × 512 envs = 2048 new transitions, 4 × 256 batch = 1024 samples
 
                 if T % args.replay_frequency == 0:
                     for _ in range(num_learning_iters):

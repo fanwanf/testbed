@@ -87,14 +87,17 @@ class Agent():
     log_ps_a = log_ps[range(self.batch_size), actions]  # log p(s_t, a_t; θonline)
 
     with torch.no_grad():
+      # Decode mask once before forward passes to avoid a redundant decode per call.
+      # (online_net and target_net each call observation_decode_irregular internally;
+      # this one explicit call replaces what used to sit after the online_net forward.)
+      _, next_action_masks, _, _ = observation_decode_irregular(next_states, self.args)
+      next_valid = next_action_masks.bool()                         # [B, 500] True=valid
+
       # Calculate nth next state probabilities
       pns = self.online_net(next_states)  # Probabilities p(s_t+n, ·; θonline)
       dns = self.support.expand_as(pns) * pns  # Distribution d_t+n = (z, p(s_t+n, ·; θonline))
       # Mask invalid actions before Double-DQN argmax — prevents selecting infeasible placements as targets
-      _, next_action_masks, _, _ = observation_decode_irregular(next_states, self.args)
-      next_valid = next_action_masks.bool()                         # [B, 500] True=valid
-      dns_expected = dns.sum(2)                                     # [B, 500] expected Q
-      dns_expected = dns_expected.masked_fill(~next_valid, float('-inf'))
+      dns_expected = dns.sum(2).masked_fill(~next_valid, float('-inf'))  # [B, 500]
       argmax_indices_ns = dns_expected.argmax(1)                    # [B]
 
       self.target_net.reset_noise()  # Sample new target net noise

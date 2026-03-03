@@ -64,8 +64,11 @@ def main(args):
     # Learning rate (moderately increased to speed up learning)
     args.learning_rate = 1e-4  # default 6.25e-5
 
-    # 3-step return (Rainbow default; n-step computation is now fixed)
-    args.multi_step = 3
+    # 1-step return: the vectorised buffer writes all 512 envs to CONSECUTIVE positions,
+    # so positions [p, p+1, p+2] come from 3 different environments — multi-step lookback
+    # across those positions produces rewards from unrelated episodes, which is incorrect.
+    # Proper n-step requires a per-env ring buffer; until then, use n=1 (standard DQN).
+    args.multi_step = 1
 
     # Fixed item sequence (for debugging)
     if args.fixed_sequence:

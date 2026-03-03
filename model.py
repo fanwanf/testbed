@@ -316,6 +316,11 @@ class DQNBPP(nn.Module):
         nn.LeakyReLU(),
         init_(nn.Linear(64, 128)),
     )
+    # Zero-init the last layer so geomEncoder is a no-op at the start of training.
+    # Without this the random residual corrupts the PointNet features before any learning
+    # has occurred, making early convergence much harder.
+    torch.nn.init.zeros_(self.geomEncoder[-1].weight)
+    torch.nn.init.zeros_(self.geomEncoder[-1].bias)
 
     # ── Rotation embedding ──────────────────────────────────────────────────
     # Learned 16-d embedding per rotation index instead of raw scalar.
