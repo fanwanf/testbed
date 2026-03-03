@@ -12,6 +12,7 @@ import math
 
 class Agent():
   def __init__(self, args):
+    self.args = args
     self.action_space = args.action_space
     self.atoms = args.atoms
     self.Vmin = args.V_min
